@@ -212,6 +212,9 @@ import System.Posix.Types ( Fd(..) )
 import Data.List ( foldl' )
 import System.IO ( Handle, IOMode(..), SeekMode(..) )
 
+import Control.Concurrent.MVar
+import Control.Monad
+
 #if __GLASGOW_HASKELL__ >= 611
 import GHC.IO.Handle ( hDuplicate )
 #else
@@ -241,8 +244,32 @@ import qualified Data.ByteString as B
 -- via the connection object.
 
 -- | 'Connection' encapsulates a connection to the backend.
-newtype Connection = Conn (ForeignPtr PGconn) deriving Eq
+newtype Connection = Conn (MVar (ForeignPtr PGconn)) deriving Eq
 data PGconn
+
+#if __GLASGOW_HASKELL__ >= 700
+
+pqfinish :: Ptr PGconn -> IO ()
+pqfinish conn = do
+   mfd <- c_PQsocket conn
+   case mfd of
+     -1 -> -- This can happen if the connection is bad/lost
+           -- This case may be worth investigating further
+           c_PQfinish conn
+     fd -> closeFdWith (\_ -> c_PQfinish conn) (Fd fd)
+
+ptrGetConnection :: Ptr PGconn -> IO Connection
+ptrGetConnection connPtr = fmap Conn $
+                           newMVar =<< FC.newForeignPtr connPtr (pqfinish connPtr)
+
+#else
+
+ptrGetConnection :: Ptr PGConn -> IO Connection
+ptrGetConnection connPtr = fmap Conn $
+                           newMVar =<< newForeignPtr p_PQfinish connPtr
+
+#endif
+
 
 -- | Makes a new connection to the database server.
 --
@@ -263,11 +290,7 @@ connectdb conninfo =
     do connPtr <- B.useAsCString conninfo c_PQconnectdb
        if connPtr == nullPtr
            then fail "libpq failed to allocate a PGconn structure"
-#if __GLASGOW_HASKELL__ >= 700
-           else Conn `fmap` FC.newForeignPtr connPtr (pqfinish connPtr)
-#else
-           else Conn `fmap` newForeignPtr p_PQfinish connPtr
-#endif
+           else ptrGetConnection connPtr
 
 -- | Make a connection to the database server in a nonblocking manner.
 connectStart :: B.ByteString -- ^ Connection Info
@@ -276,32 +299,20 @@ connectStart connStr =
     do connPtr <- B.useAsCString connStr c_PQconnectStart
        if connPtr == nullPtr
            then fail "libpq failed to allocate a PGconn structure"
-#if __GLASGOW_HASKELL__ >= 700
-           else Conn `fmap` FC.newForeignPtr connPtr (pqfinish connPtr)
-#else
-           else Conn `fmap` newForeignPtr p_PQfinish connPtr
-#endif
+           else ptrGetConnection connPtr
 
-#if __GLASGOW_HASKELL__ >= 700
-pqfinish :: Ptr PGconn -> IO ()
-pqfinish conn = do
-   mfd <- c_PQsocket conn
-   case mfd of
-     -1 -> -- This can happen if the connection is bad/lost
-           -- This case may be worth investigating further
-           c_PQfinish conn
-     fd -> closeFdWith (\_ -> c_PQfinish conn) (Fd fd)
-#endif
 
 -- | Allocate a Null Connection,  which all libpq functions
 -- should safely fail on.
 newNullConnection :: IO Connection
-newNullConnection = Conn `fmap` newForeignPtr_ nullPtr
+newNullConnection = Conn `fmap` ((newMVar <=< newForeignPtr_) nullPtr)
 
 -- | Test if a connection is the Null Connection.
-isNullConnection :: Connection -> Bool
-isNullConnection (Conn x) = unsafeForeignPtrToPtr x == nullPtr
-{-# INLINE isNullConnection #-}
+isNullConnection :: Connection -> IO Bool
+isNullConnection (Conn mv) = do
+  fptr <- withMVar mv return
+  ptr <- withForeignPtr fptr return
+  return (ptr == nullPtr)
 
 -- | If 'connectStart' succeeds, the next stage is to poll libpq so
 -- that it can proceed with the connection sequence. Use 'socket' to
@@ -409,8 +420,10 @@ pollHelper poller connection =
 -- has been called.
 finish :: Connection
        -> IO ()
-finish (Conn fp) =
-    do finalizeForeignPtr fp
+finish (Conn mv) = do
+  modifyMVar_ mv (\fptr -> do
+                     finalizeForeignPtr fptr
+                     newForeignPtr_ nullPtr)
 
 
 -- $connstatus
@@ -1964,18 +1977,18 @@ untrace :: Connection
         -> IO ()
 untrace connection = withConn connection c_PQuntrace
 
+withConnForeignPtr :: Connection
+                   -> (ForeignPtr PGconn -> IO b)
+                   -> IO b
+withConnForeignPtr (Conn mv) f =
+  withMVar mv $ \fptr -> f fptr
 
 withConn :: Connection
          -> (Ptr PGconn -> IO b)
          -> IO b
-withConn connection f =
-    withConn' connection $ flip withForeignPtr f
-
-
-withConn' :: Connection
-          -> (ForeignPtr PGconn -> IO b)
-          -> IO b
-withConn' (Conn fp) f = f fp
+withConn (Conn mv) f =
+  withMVar mv $ \fptr ->
+  withForeignPtr fptr f
 
 
 enumFromConn :: (Integral a, Enum b) => Connection
@@ -2021,7 +2034,7 @@ maybeBsFromConn :: Connection
                 -> (Ptr PGconn -> IO CString)
                 -> IO (Maybe B.ByteString)
 maybeBsFromConn connection f =
-    withConn' connection $ \fp -> maybeBsFromForeignPtr fp f
+    withConnForeignPtr connection $ \fp -> maybeBsFromForeignPtr fp f
 
 
 -- | Returns a ByteString with a finalizer that touches the ForeignPtr
