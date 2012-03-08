@@ -144,7 +144,13 @@ module Database.PostgreSQL.LibPQ
     , unescapeBytea
 
     -- * Using COPY FROM
+    , CopyResult(..)
+    , putCopyData
+    , putCopyEnd
+
+    -- ** Formatting datums
     , formatCopyRow
+    , putCopyRow
 
     -- * Asynchronous Command Processing
     -- $asynccommand
@@ -1509,6 +1515,55 @@ unescapeBytea bs =
                     return $ Just $ B.fromForeignPtr tofp 0 $ fromIntegral l
 
 
+data CopyResult = CopyOk            -- ^ The data was sent.
+                | CopyError         -- ^ An error occurred (use 'errorMessage'
+                                    --   to retrieve details).
+                | CopyWouldBlock    -- ^ The data was not sent because the
+                                    --   attempt would block (this case is only
+                                    --   possible if the connection is in
+                                    --   nonblocking mode)  Wait for
+                                    --   write-ready (e.g. by using
+                                    --   'Control.Concurrent.threadWaitWrite'
+                                    --   on the 'socket') and try again.
+
+
+toCopyResult :: CInt -> CopyResult
+toCopyResult n | n < 0     = CopyError
+               | n == 0    = CopyWouldBlock
+               | otherwise = CopyOk
+
+
+putCopyData :: Connection -> B.ByteString -> IO CopyResult
+putCopyData conn bs =
+    B.unsafeUseAsCStringLen bs $ putCopyCString conn
+
+
+putCopyCString :: Connection -> CStringLen -> IO CopyResult
+putCopyCString conn (str, len) =
+    fmap toCopyResult $
+        withConn conn $ \ptr -> c_PQputCopyData ptr str (fromIntegral len)
+
+
+putCopyEnd :: Connection -> Maybe B.ByteString -> IO CopyResult
+putCopyEnd conn Nothing =
+    fmap toCopyResult $
+        withConn conn $ \ptr -> c_PQputCopyEnd ptr nullPtr
+putCopyEnd conn (Just errormsg) =
+    fmap toCopyResult $
+        B.useAsCString errormsg $ \errormsg_cstr ->
+            withConn conn $ \ptr -> c_PQputCopyEnd ptr errormsg_cstr
+
+
+-- | A combination of 'putCopyData' and 'formatCopyRow'.  This should be
+-- slightly more efficient than:
+--
+-- >putCopyData conn $ formatCopyRow params
+--
+-- as it does not allocate an intermediate 'B.ByteString'.
+putCopyRow :: Connection -> [Maybe (B.ByteString, Format)] -> IO CopyResult
+putCopyRow conn params = withFormatCopyRow params $ putCopyCString conn
+
+
 -- | Escape a row of data for use with a COPY FROM statement.
 -- Include a trailing newline at the end.
 --
@@ -1518,6 +1573,7 @@ unescapeBytea bs =
 -- >COPY tablename (id, col1, col2) FROM stdin;
 formatCopyRow :: [Maybe (B.ByteString, Format)] -> IO B.ByteString
 formatCopyRow params = withFormatCopyRow params B.packCStringLen
+
 
 withFormatCopyRow :: [Maybe (B.ByteString, Format)]
                   -> (CStringLen -> IO a)
@@ -1536,12 +1592,14 @@ withFormatCopyRow params inner =
                           ++ show bufsize ++ " bytes, but "
                           ++ show len ++ " bytes were written into it)"
 
+
 -- | Compute the maximum number of bytes the escaped datum may take up,
 -- including the trailing tab or newline character.
 paramSize :: Maybe (B.ByteString, Format) -> Int
 paramSize Nothing            = 3 -- Length of "\\N\t"
 paramSize (Just (s, Text))   = B.length s * 2 + 1
 paramSize (Just (s, Binary)) = B.length s * 5 + 1
+
 
 emitParam :: Ptr CUChar -> Maybe (B.ByteString, Format) -> IO (Ptr CUChar)
 emitParam out Nothing = do
@@ -1554,6 +1612,7 @@ emitParam out (Just (s, Text)) =
 emitParam out (Just (s, Binary)) =
     B.unsafeUseAsCStringLen s $ \(ptr, len) ->
         c_escape_copy_bytea (castPtr ptr) (fromIntegral len) out
+
 
 emitParams :: Ptr CUChar -> [Maybe (B.ByteString, Format)] -> IO (Ptr CUChar)
 emitParams out [] = do
@@ -2357,6 +2416,12 @@ foreign import ccall        "libpq-fe.h PQsetClientEncoding"
 type PGVerbosity = CInt
 foreign import ccall unsafe "libpq-fe.h PQsetErrorVerbosity"
     c_PQsetErrorVerbosity :: Ptr PGconn -> PGVerbosity -> IO PGVerbosity
+
+foreign import ccall        "libpq-fe.h PQputCopyData"
+    c_PQputCopyData :: Ptr PGconn -> Ptr CChar -> CInt -> IO CInt
+
+foreign import ccall        "libpq-fe.h PQputCopyEnd"
+    c_PQputCopyEnd :: Ptr PGconn -> CString -> IO CInt
 
 foreign import ccall        "libpq-fe.h PQsendQuery"
     c_PQsendQuery :: Ptr PGconn -> CString ->IO CInt
