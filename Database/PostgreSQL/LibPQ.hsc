@@ -144,6 +144,7 @@ module Database.PostgreSQL.LibPQ
     , unescapeBytea
 
     -- * Using COPY FROM
+    -- $copyfrom
     , CopyResult(..)
     , putCopyData
     , putCopyEnd
@@ -1514,6 +1515,31 @@ unescapeBytea bs =
                     l <- peek to_length
                     return $ Just $ B.fromForeignPtr tofp 0 $ fromIntegral l
 
+
+-- $copyfrom
+--
+-- This provides support for PostgreSQL's @COPY FROM@ facility.  When inserting
+-- rows in bulk, @COPY FROM@ is /much/ faster than individual @INSERT@
+-- statements.
+--
+-- The following example illustrates the procedure for using @COPY FROM@ with
+-- libpq:
+--
+-- >-- Put the connection in the COPY_IN state
+-- >-- by executing a COPY ... FROM query.
+-- >Just result <- exec conn "COPY foo (a, b) FROM stdin"
+-- >CopyIn <- resultStatus result
+-- >
+-- >-- Send a couple lines of COPY data
+-- >CopyOk <- putCopyRow conn [Just ("1", Text), Just ("one", Text)]
+-- >CopyOk <- putCopyRow conn [Just ("2", Text), Nothing]
+-- >
+-- >-- Send end-of-data indication
+-- >CopyOk <- putCopyEnd conn Nothing
+-- >
+-- >-- Get the final result status of the copy command
+-- >Just result <- getResult conn
+-- >CommandOk <- resultStatus result
 
 data CopyResult = CopyOk            -- ^ The data was sent.
                 | CopyError         -- ^ An error occurred (use 'errorMessage'
