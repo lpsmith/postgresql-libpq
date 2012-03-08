@@ -143,6 +143,9 @@ module Database.PostgreSQL.LibPQ
     , escapeByteaConn
     , unescapeBytea
 
+    -- * Using COPY FROM
+    , formatCopyRow
+
     -- * Asynchronous Command Processing
     -- $asynccommand
     , sendQuery
@@ -1506,6 +1509,67 @@ unescapeBytea bs =
                     return $ Just $ B.fromForeignPtr tofp 0 $ fromIntegral l
 
 
+-- | Escape a row of data for use with a COPY FROM statement.
+-- Include a trailing newline at the end.
+--
+-- This assumes text format (rather than BINARY or CSV) with the default
+-- delimiter (tab) and default null string (\\N).  A suitable query looks like:
+--
+-- >COPY tablename (id, col1, col2) FROM stdin;
+formatCopyRow :: [Maybe (B.ByteString, Format)] -> IO B.ByteString
+formatCopyRow params = withFormatCopyRow params B.packCStringLen
+
+withFormatCopyRow :: [Maybe (B.ByteString, Format)]
+                  -> (CStringLen -> IO a)
+                  -> IO a
+withFormatCopyRow params inner =
+    let bufsize =
+            if null params
+                then 1
+                else sum $ map paramSize params
+     in allocaBytes bufsize $ \buf -> do
+            end <- emitParams buf params
+            let len = end `minusPtr` buf
+            if len <= bufsize
+                then inner (castPtr buf, len)
+                else error $ "formatCopyRow: Buffer overrun (buffer is "
+                          ++ show bufsize ++ " bytes, but "
+                          ++ show len ++ " bytes were written into it)"
+
+-- | Compute the maximum number of bytes the escaped datum may take up,
+-- including the trailing tab or newline character.
+paramSize :: Maybe (B.ByteString, Format) -> Int
+paramSize Nothing            = 3 -- Length of "\\N\t"
+paramSize (Just (s, Text))   = B.length s * 2 + 1
+paramSize (Just (s, Binary)) = B.length s * 5 + 1
+
+emitParam :: Ptr CUChar -> Maybe (B.ByteString, Format) -> IO (Ptr CUChar)
+emitParam out Nothing = do
+    pokeElemOff out 0 92    -- '\\'
+    pokeElemOff out 1 78    -- 'N'
+    return (out `plusPtr` 2)
+emitParam out (Just (s, Text)) =
+    B.unsafeUseAsCStringLen s $ \(ptr, len) ->
+        c_escape_copy_text (castPtr ptr) (fromIntegral len) out
+emitParam out (Just (s, Binary)) =
+    B.unsafeUseAsCStringLen s $ \(ptr, len) ->
+        c_escape_copy_bytea (castPtr ptr) (fromIntegral len) out
+
+emitParams :: Ptr CUChar -> [Maybe (B.ByteString, Format)] -> IO (Ptr CUChar)
+emitParams out [] = do
+    poke out 10 -- newline
+    return (out `plusPtr` 1)
+emitParams out (x:xs) = do
+    out' <- emitParam out x
+    if null xs
+        then do
+            poke out' 10 -- newline
+            return (out' `plusPtr` 1)
+        else do
+            poke out' 9 -- tab
+            emitParams (out' `plusPtr` 1) xs
+
+
 -- $asynccommand
 -- The 'exec' function is adequate for submitting commands in normal,
 -- synchronous applications. It has a couple of deficiencies, however,
@@ -2503,3 +2567,18 @@ foreign import ccall        "libpq-fs.h lo_close"
 
 foreign import ccall        "libpq-fs.h lo_unlink"
     c_lo_unlink :: Ptr PGconn -> Oid -> IO CInt
+
+------------------------------------------------------------------------
+-- cbits imports
+
+foreign import ccall unsafe
+    c_escape_copy_text :: Ptr CUChar        -- ^ const unsigned char *in
+                       -> CInt              -- ^ int in_size
+                       -> Ptr CUChar        -- ^ unsigned char *out
+                       -> IO (Ptr CUChar)   -- ^ Returns pointer to end of written data
+
+foreign import ccall unsafe
+    c_escape_copy_bytea :: Ptr CUChar       -- ^ const unsigned char *in
+                        -> CInt             -- ^ int in_size
+                        -> Ptr CUChar       -- ^ unsigned char *out
+                        -> IO (Ptr CUChar)  -- ^ Returns pointer to end of written data
