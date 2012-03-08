@@ -21,7 +21,10 @@ Build-type:          Custom
 Cabal-version:       >=1.8
 
 Extra-source-files:
+    testing/copy-from.hs
     testing/copy-from-example.hs
+    testing/run-copy-from
+    testing/run-copy-from.expected
 
 Library
   Exposed-modules:     Database.PostgreSQL.LibPQ

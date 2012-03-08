@@ -1,0 +1,41 @@
+SET
+DROP TABLE
+DROP TABLE
+DROP TABLE
+CREATE TABLE
+CREATE TABLE
+ id |               md5                
+----+----------------------------------
+    | 
+  0 | 
+  1 | d41d8cd98f00b204e9800998ecf8427e
+  2 | 363b122c528f54df4a0446b6bab05515
+  3 | 5e732a1878be2342dbfeff5fe3ca5aa3
+  4 | 68b329da9893e34099c7d8ad5cb9c940
+  5 | 44d0dc437936b13f7cea2f77053806bd
+  6 | 3766e5bb8e3dc00c16eb6e390c648637
+  7 | 81051bcc2cf1bedf378224b0a93e2877
+  8 | e5ea7fb51ff27a20c3f622df66b9acdc
+  9 | a87b8e894a4b79543ba53d7d6982e657
+ 10 | ca927a2522f2e2d0c150c1e1a89139ce
+(12 rows)
+
+ id |               md5                
+----+----------------------------------
+    | 
+  0 | 
+  1 | d41d8cd98f00b204e9800998ecf8427e
+  2 | 363b122c528f54df4a0446b6bab05515
+  3 | 5e732a1878be2342dbfeff5fe3ca5aa3
+  4 | 68b329da9893e34099c7d8ad5cb9c940
+  5 | 44d0dc437936b13f7cea2f77053806bd
+  6 | 3766e5bb8e3dc00c16eb6e390c648637
+  7 | 81051bcc2cf1bedf378224b0a93e2877
+  8 | e5ea7fb51ff27a20c3f622df66b9acdc
+  9 | a87b8e894a4b79543ba53d7d6982e657
+ 10 | ca927a2522f2e2d0c150c1e1a89139ce
+ 11 | 93b885adfe0da089cdf634904fd59f71
+ 12 | c4103f122d27677c9db144cae1394a66
+ 13 | e2c865db4162bed963bfaa9ef6ac18f0
+(15 rows)
+

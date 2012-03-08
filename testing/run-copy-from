@@ -1,0 +1,22 @@
+#!/bin/bash
+set -e
+
+ghc -Wall copy-from.hs
+
+psql <<EOD
+    \set ON_ERROR_STOP ON
+    SET client_min_messages = warning;
+    DROP TABLE IF EXISTS test_text;
+    DROP TABLE IF EXISTS test_text;
+    DROP TABLE IF EXISTS test_binary;
+    CREATE TABLE test_text (id INT, content TEXT);
+    CREATE TABLE test_binary (id INT, content BYTEA);
+EOD
+
+./copy-from
+
+psql <<EOD
+    \set ON_ERROR_STOP ON
+    SELECT id, md5(content) FROM test_text;
+    SELECT id, md5(content) FROM test_binary;
+EOD
