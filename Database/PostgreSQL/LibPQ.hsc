@@ -1519,8 +1519,8 @@ unescapeBytea bs =
 -- $copyfrom
 --
 -- This provides support for PostgreSQL's @COPY FROM@ facility.  When inserting
--- rows in bulk, @COPY FROM@ is /much/ faster than individual @INSERT@
--- statements.
+-- rows in bulk, @COPY FROM@ is faster than individual @INSERT@ statements for
+-- each row.
 --
 -- For more information, see:
 --
