@@ -184,6 +184,12 @@ module Database.PostgreSQL.LibPQ
     , setClientEncoding
     , Verbosity(..)
     , setErrorVerbosity
+    , NoticeProcessor
+    , NoticeReceiver
+    , enableNoticeReporting
+    , disableNoticeReporting
+    , setNoticeProcessor
+    , setNoticeReceiver
 
     -- * Large Objects
     -- $largeobjects
@@ -208,7 +214,8 @@ where
 #include <libpq/libpq-fs.h>
 
 import Prelude hiding ( print )
-import Foreign
+import Control.Monad  ( void )
+import Foreign hiding ( void )
 import Foreign.C.Types
 import Foreign.C.String
 #if __GLASGOW_HASKELL__ >= 702
@@ -217,7 +224,7 @@ import qualified Foreign.ForeignPtr.Unsafe as Unsafe
 import qualified Foreign.Concurrent as FC
 import System.Posix.Types ( Fd(..) )
 import Data.List ( foldl' )
-import System.IO ( IOMode(..), SeekMode(..) )
+import System.IO ( IOMode(..), SeekMode(..), stderr )
 
 #if __GLASGOW_HASKELL__ >= 700
 import GHC.Conc ( closeFdWith )  -- Won't work with GHC 7.0.1
@@ -231,6 +238,8 @@ import qualified Data.ByteString.Internal as B ( fromForeignPtr
                                                , createAndTrim
                                                )
 import qualified Data.ByteString as B
+
+import           Control.Applicative           ((<$>))
 
 #if __GLASGOW_HASKELL__ >= 700 && __GLASGOW_HASKELL__ < 706
 import Control.Concurrent (newMVar, tryTakeMVar)
@@ -1951,7 +1960,6 @@ setClientEncoding connection enc =
 
        return $! stat == 0
 
-
 data Verbosity = ErrorsTerse
                | ErrorsDefault
                | ErrorsVerbose deriving (Eq, Show)
@@ -1985,6 +1993,68 @@ setErrorVerbosity :: Connection
 setErrorVerbosity connection verbosity =
     enumFromConn connection $ \p ->
         c_PQsetErrorVerbosity p $ fromIntegral $ fromEnum verbosity
+
+-- Notice processing utilities per
+-- http://www.postgresql.org/docs/9.4/static/libpq-notice-processing.html
+
+type NoticeReceiver  = Ptr () -> Ptr PGresult -> IO ()
+type NoticeProcessor = Ptr () -> CString -> IO ()
+
+-- | NOP to supress PostgreSQL's default of writing NOTICEs to stderr
+ignoreNotices :: NoticeProcessor
+ignoreNotices _ _ = return ()
+
+-- | Equivalent to PostgreSQL's default of writing NOTICEs to stderr
+reportNotices :: NoticeProcessor
+reportNotices _ cstr = B.packCString cstr >>= B.hPutStrLn stderr
+
+-- | Internal function to set notice processor - returns a funptr to the
+-- old notice processor rather than importing it.
+setNoticeProcessor' :: Connection -> NoticeProcessor -> IO (FunPtr NoticeProcessor)
+setNoticeProcessor' conn procFun = withConn conn setProcessor
+  where setProcessor pgconn = do
+          f <- mkNoticeProcessor procFun
+          c_PQsetNoticeProcessor pgconn f nullPtr
+
+-- | Sets the notice processor function for the given connection, returning
+-- the existing processor, if any.
+setNoticeProcessor :: Connection                  -- ^ The database connection
+                   -> NoticeProcessor             -- ^ The notice processor function
+                   -> IO (Maybe NoticeProcessor)  -- ^ A pointer to the previous notice processor, if any
+setNoticeProcessor conn procFun = importFun <$> setNoticeProcessor' conn procFun
+  where importFun oldProc
+          | oldProc /= nullFunPtr = Just $ importNoticeProcessor oldProc
+          | otherwise             = Nothing
+
+
+-- | Internal function to set notice receiver - returns a FunPtr to the
+-- old notice receiver rather than importing it.
+setNoticeReceiver' :: Connection -> NoticeReceiver -> IO (FunPtr NoticeReceiver)
+setNoticeReceiver' conn recvFun = withConn conn setReceiver
+  where setReceiver pgconn = do
+          f <- mkNoticeReceiver recvFun
+          c_PQsetNoticeReceiver pgconn f nullPtr
+
+-- | Sets the notice receiver function for the given connection, returning
+-- the existing receiver, if any.
+setNoticeReceiver :: Connection                 -- ^ The database connection
+                  -> NoticeReceiver             -- ^ The notice processor function
+                  -> IO (Maybe NoticeReceiver)  -- ^ A pointer to the previous notice receiver, if any
+setNoticeReceiver conn recvFun = importFun <$> setNoticeReceiver' conn recvFun
+  where importFun oldRecv
+          | oldRecv /= nullFunPtr = Just $ importNoticeReceiver oldRecv
+          | otherwise             = Nothing
+
+-- | Resets the connection to the postgres default of writing NOTICEs to stderr
+enableNoticeReporting :: Connection -> IO ()
+enableNoticeReporting c = void $ setNoticeProcessor' c reportNotices
+
+-- | Sets the given connection to ignore NOTICEs resulting from query executions
+disableNoticeReporting :: Connection -> IO ()
+disableNoticeReporting c = void $ setNoticeProcessor c ignoreNotices
+
+
+
 
 withConn :: Connection
          -> (Ptr PGconn -> IO b)
@@ -2439,6 +2509,24 @@ foreign import ccall        "libpq-fe.h PQdescribePrepared"
 
 foreign import ccall        "libpq-fe.h PQdescribePortal"
     c_PQdescribePortal :: Ptr PGconn -> CString -> IO (Ptr PGresult)
+
+foreign import ccall        "wrapper"
+    mkNoticeReceiver :: NoticeReceiver -> IO (FunPtr NoticeReceiver)
+
+foreign import ccall        "wrapper"
+    mkNoticeProcessor :: NoticeProcessor -> IO (FunPtr NoticeProcessor)
+
+foreign import ccall        "dynamic"
+    importNoticeProcessor :: FunPtr NoticeProcessor -> NoticeProcessor
+
+foreign import ccall        "dynamic"
+    importNoticeReceiver  :: FunPtr NoticeReceiver -> NoticeReceiver
+
+foreign import ccall        "libpq-fe.h PQsetNoticeReceiver"
+    c_PQsetNoticeReceiver :: Ptr PGconn -> FunPtr NoticeReceiver -> Ptr () -> IO (FunPtr NoticeReceiver)
+
+foreign import ccall        "libpq-fe.h PQsetNoticeProcessor"
+    c_PQsetNoticeProcessor :: Ptr PGconn -> FunPtr NoticeProcessor -> Ptr () -> IO (FunPtr NoticeProcessor)
 
 foreign import ccall        "libpq-fe.h &PQclear"
     p_PQclear :: FunPtr (Ptr PGresult ->IO ())
