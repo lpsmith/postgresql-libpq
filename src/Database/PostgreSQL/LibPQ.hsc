@@ -213,40 +213,42 @@ where
 #include <libpq-fe.h>
 #include <libpq/libpq-fs.h>
 
-import Prelude hiding ( print )
-import Control.Monad  ( void )
-import Foreign hiding ( void )
-import Foreign.C.Types
-import Foreign.C.String
+import           Prelude                             hiding ( print )
+import           Control.Monad                       ( void )
+import           Foreign                             hiding ( void )
+import           Foreign.C.Types
+import           Foreign.C.String
 #if __GLASGOW_HASKELL__ >= 702
 import qualified Foreign.ForeignPtr.Unsafe as Unsafe
 #endif
-import qualified Foreign.Concurrent as FC
-import System.Posix.Types ( Fd(..) )
-import Data.List ( foldl' )
-import System.IO ( IOMode(..), SeekMode(..), stderr )
+import qualified Foreign.Concurrent        as FC
+import           System.Posix.Types                  ( Fd(..) )
+import           Data.List                           ( foldl' )
+import           System.IO                           ( IOMode(..), SeekMode(..)
+                                                     , stderr )
 
 #if __GLASGOW_HASKELL__ >= 700
-import GHC.Conc ( closeFdWith )  -- Won't work with GHC 7.0.1
+-- Won't work with GHC 7.0.1
+import           GHC.Conc                            ( closeFdWith )
 #endif
-import System.Posix.Types ( CPid )
+import System.Posix.Types                            ( CPid )
 
 import Data.ByteString.Char8 ()
-import qualified Data.ByteString.Unsafe as B
-import qualified Data.ByteString.Internal as B ( fromForeignPtr
-                                               , c_strlen
-                                               , createAndTrim
-                                               )
-import qualified Data.ByteString as B
+import qualified Data.ByteString.Unsafe    as B
+import qualified Data.ByteString.Internal  as B      ( fromForeignPtr
+                                                     , c_strlen
+                                                     , createAndTrim
+                                                     )
+import qualified Data.ByteString           as B
 
-import           Control.Applicative           ((<$>))
+import           Control.Applicative                 ((<$>))
 
 #if __GLASGOW_HASKELL__ >= 700 && __GLASGOW_HASKELL__ < 706
-import Control.Concurrent (newMVar, tryTakeMVar)
+import           Control.Concurrent                  (newMVar, tryTakeMVar)
 #endif
 
 #if __GLASGOW_HASKELL__ >= 700
-import Control.Exception (mask_)
+import           Control.Exception                   (mask_)
 #else
 import qualified Control.Exception
 mask_ = Control.Exception.block
