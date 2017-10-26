@@ -1944,6 +1944,9 @@ instance Storable Notify where
 -- 'Nothing' if there are no pending notifications. Once a
 -- notification is returned from notifies, it is considered handled
 -- and will be removed from the list of notifications.
+--
+-- Note that you must call 'consumeInput' before calling this
+-- otherwise the result will always be 'Nothing'.
 notifies :: Connection
          -> IO (Maybe Notify)
 notifies connection =
