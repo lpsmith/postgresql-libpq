@@ -1945,8 +1945,12 @@ instance Storable Notify where
 -- notification is returned from notifies, it is considered handled
 -- and will be removed from the list of notifications.
 --
--- Note that you must call 'consumeInput' before calling this
--- otherwise the result will always be 'Nothing'.
+-- Note that 'notifies' does not actually poll the server for new
+-- notifications. It only returns notifications that have already
+-- been pulled from the server. One way to pull notifications is to
+-- call 'consumeInput'. Performing a query works too. See the libpq
+-- documentation for more details:
+-- <https://www.postgresql.org/docs/9.6/static/libpq-notify.html>
 notifies :: Connection
          -> IO (Maybe Notify)
 notifies connection =
